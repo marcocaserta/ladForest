@@ -1,23 +1,34 @@
 '''
-/***************************************************************************
- *   copyright (C) 2016 by Marco Caserta                                   *
- *   marco dot caserta at ie dot edu                                       *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program; if not, write to the                         *
- *   Free Software Foundation, Inc.,                                       *
- *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
- ***************************************************************************/
+==========================================================================
+
+   * copyright (C) 2016 by Marco Caserta                                  
+
+   * marco dot caserta at ie dot edu                                       
+
+==========================================================================
+                                                                         
+   This program is free software; you can redistribute it and/or modify  
+   it under the terms of the GNU General Public License as published by  
+   the Free Software Foundation; either version 2 of the License, or     
+   (at your option) any later version.                                   
+                                                                         
+   This program is distributed in the hope that it will be useful,       
+   but WITHOUT ANY WARRANTY; without even the implied warranty of        
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         
+   GNU General Public License for more details.                          
+                                                                         
+   You should have received a copy of the GNU General Public License     
+   along with this program; if not, write to the                         
+   Free Software Foundation, Inc.,                                       
+   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             
+
+==========================================================================
+
+This is an example of a math equation :math:`a^2 + x_j = 2`.
+
+.. math::
+    x^2 + y_i
+
 '''
 
 from __future__ import division
@@ -31,12 +42,16 @@ import seaborn as sns
 import matplotlib.gridspec as gridspec
 import random
 import bisect
-from sklearn.cross_validation import KFold
+#from sklearn.cross_validation import KFold
+from sklearn.model_selection import KFold
 from datetime import datetime
-import editdistance
-
+#  import editdistance
+from functools import wraps
+import time
+from collections import Counter, defaultdict
 
 nFolds                  = 10
+#  nFolds                  = 2
 withPrinting            = 0
 
 nForestCycle            = -1
@@ -51,6 +66,29 @@ neg = 2
 EPSI = 0.0000001
 
 
+def timefn(fn):
+    """"
+    Function used to measure time of a function.
+    """
+    @wraps(fn)
+    def measure_time(*args, **kwargs):
+        t1 = time.time()
+        result = fn(*args, **kwargs)
+        t2 = time.time()
+        #  print("@timefn:", fn.__name__, "took " , str(t2-t1),"seconds.")
+        print("@timefn: {0} took {1:.6f} seconds".format(fn.__name__, t2-t1))
+        return result
+    return measure_time
+
+@timefn
+def sortByAttr(y, x):
+    sortedIndex = np.argsort(x)
+    sortedY = y[sortedIndex[0]]
+    sortedX = x[sortedIndex]
+
+    return sortedY, sortedX
+
+
 # Parse command line
 def parseCommandLine(argv):
     global inputfile
@@ -61,11 +99,13 @@ def parseCommandLine(argv):
     try:
         opts, args = getopt.getopt(argv, "hi:d:c:f:", ["help","ifile=","depth=","cycles=","fuzziness="])
     except getopt.GetoptError:
-        print "Command Line Erorr. Usage : test.py -i <inputfile> -d <depth> - c <cycles> -f <fuzziness>"
+        print ("Command Line Erorr. Usage : test.py -i <inputfile> -d <depth>\
+        -c <cycles> -f <fuzziness>")
         sys.exit(2)
     for opt, arg in opts:
         if opt in ("-h", "--help"):
-            print "Usage : test.py -i <inputfile> -d <depth> - c <cycles> -f <fuzziness>"
+            print ("Usage : test.py -i <inputfile> -d <depth> - c <cycles> \
+            -f <fuzziness>")
             sys.exit()
         elif opt in ("-i", "--ifile"):
             inputfile = arg
@@ -119,6 +159,37 @@ class Stats:
         self.avgLengthPos = [] # average length (# literals) of positive patterns
         self.nNeg         = [] # nr of negative patterns
         self.avgLengthNeg = [] # average length (# literals) of negative patterns
+        self.cnt          = Counter()
+        self.cntSign      = Counter()
+        self.cntClass     = Counter()
+
+    def savePatterns(self, patterns, signs, classType):
+        '''
+        Save patterns, with their sign and class.
+        '''
+        for pp, sign in zip(patterns, signs):
+            self.cnt[tuple(pp)]     += 1
+            self.cntSign[tuple(pp)]  = sign
+            self.cntClass[tuple(pp)] = classType 
+
+
+    def analysis(self):
+        '''
+        Analyze generated patterns, to determine most frequent, with sign and
+        class.
+        '''
+
+        print("*"*(len("* Most common patterns *")))
+        print("* Most common patterns *")
+        print("*"*(len("* Most common patterns *")))
+        
+        print("{:^5s} | {:^10s} | {}".format("Class", "Freq", "Pattern"))
+        print("-"*40)
+        for pp in self.cnt.most_common(5):
+            sign = self.cntSign[pp[0]]
+            pattern = [str(pp[0][k]) if sign[k] == 1 else str(pp[0][k]) + '\u0305' for k in range(len(pp[0])) ]
+            print("{:^5s} | {:^10d} | {}".format(self.cntClass[pp[0]], pp[1], pattern))
+
 # END of Class Stats  ==========================================================
 
 class Instance: 
@@ -160,7 +231,6 @@ class Instance:
                     self.nNeg = self.nNeg + 1
 # END of Class Instance ========================================================
 
-                    
 def splitData(dataset, set_index):
     '''
     Take the "dataset" and extract from it the observations (rows) included in
@@ -203,12 +273,10 @@ def isFeasibleProblem(dataset):
                     return -1
     return 1
 
-    
 def createSampleForest(dataset, set_row, set_col):
     '''
     Create the data structure for the LAD forest run.
     '''
-    
     #print("selecting cols ", set_col)
     subset          = Instance()
     subset.nObs     = len(set_row)
@@ -241,9 +309,19 @@ def dataBinarizationPhase(inp, means, stdevs, pTau):
 
     '''
     Describe the strategy used for data binarization.
+
+    For each column (attribute), we first sort the observations from lowest to
+    highest. Next, starting form the first observation (call it 'current'), we 
+    scroll through observations until we find one observation that belongs to 
+    a different class, compared with the current observation. We now have an
+    interval (w.r.t. the current attribute) which contains observations
+    belonging to both class (the first and the last, by construction, must be
+    in different clases.) The cutpoint is the middle point of this interval.
+
+    We add the cutpoint to the list of cutpoints for this attribute. Once
+    cutpoints for all attributes have been generated, we create a binary
+    matrix.
     
-    sns.set()
-    fig = plt.figure(figsize=(6,6))
     '''
     
     # sort values w.r.t. each attribute
@@ -252,32 +330,9 @@ def dataBinarizationPhase(inp, means, stdevs, pTau):
 
     for j in range(inp.nAttr):
         
-        tau = pTau*stdevs[j]
-        
-        '''
-        posO = [npA[k,j] for k in range(inp.nObs) if inp.y[k] == pos]
-        negO = [npA[k,j] for k in range(inp.nObs) if inp.y[k] == neg]
-
-        plt.subplot(3,3, j)
-        plt.hist([posO, negO], label=["pos","neg"], alpha=0.5)
-        plt.title("Attribute {0}".format(j))
-        plt.legend()
-        '''
-        '''
-        ps = pandas.Series([i for i in posO])
-        ccPos = ps.value_counts()
-        ps = pandas.Series([i for i in negO])
-        ccNeg = ps.value_counts()
-        print("POSITIVES ", ccPos)
-        print("NEGATIVES ", ccNeg)
-        input("aka")
-        '''
-
-        cutpoints    = []
-        index        = [i for i in range(inp.nObs)]
-        sortedI      = [i for (k,i) in sorted(zip(npA[:,j], index))]
-        currentClass = inp.y[sortedI[0]]
-        currentValue = npA[sortedI[0], j]
+        tau       = pTau*stdevs[j]
+        cutpoints = []
+        sortedI   = np.argsort(npA[:,j])
             
         k = 0
         while (k < inp.nObs):    
@@ -292,16 +347,13 @@ def dataBinarizationPhase(inp, means, stdevs, pTau):
 
             if (abs(currentValue - npA[sortedI[w],j]) > tau):
                 cutpoints.append((currentValue + npA[sortedI[w],j])/2.0)
-                #print("new set of cutpoints :: ", cutpoints)
+                #  print("new set of cutpoints :: ", cutpoints)
                 
             k = w
                 
         cuts.append(cutpoints)       
         #print(cutpoints)
 
-    #plt.show()
-        
-    #fig.savefig("output.png")
     Abin = createBinaryMatrix(inp, cuts)
     nBinAttr = len(Abin[0])
         
@@ -312,6 +364,16 @@ def dataBinarizationPhase(inp, means, stdevs, pTau):
 def createBinaryMatrix(inp, cuts):
     '''
     Create binary matrix for the attributes.
+    We proceed rowwise. Given the cutpoints, a column for each cutpoint will be
+    created. For example, if AGE is [10, 20, 30], then column AGE is replaced
+    by three binary columns. Given the discrete AGE value of an observation, we
+    place 0 or 1 in each of these categories, depending on whether the AGE
+    value is less than cutpoint (0), or greater than cutpoint (1).
+    
+    For example, an observation with AGE = 25 is associated to the following
+    three binary values: [1, 1, 0]. We add these three values to rowBin and we
+    move to the next attribute.
+
     The binary matrix is stored in inp.Abin[][]
     '''
 
@@ -323,9 +385,27 @@ def createBinaryMatrix(inp, cuts):
             binRow = binRow + [1]*pos + [0]*(len(cuts[j])-pos)
 
         # add binary row
+        #  print("lengths = ", len(binRow), " vs ", sum([len(cuts[j]) for j in range(inp.nAttr)]))
+        
+        
         Abin.append(binRow)
 
     return Abin
+
+def fromBinaryToOriginal(inp, cuts):
+
+    progr = 0
+    dd = defaultdict(tuple)
+    for j in range(inp.nAttr):
+        for k in range(len(cuts[j])):
+            el = {progr : (j, cuts[j][k])}
+            progr += 1
+            dd.update(el)
+
+        print("Cuts ", cuts[j])
+        print("Properties of bin attr 1")
+        print(dd)
+        exit(123)
 
 
 def patternGenerationMIP2(inp, alphaI, mainClass, otherClass, timeLimit=60, solLimit=9999,
@@ -657,8 +737,8 @@ def patternGenerationMIP(inp, alphaI, mainClass, otherClass, timeLimit=60, solLi
             return mainClass, pattern, signPattern, nCovered
 
 
-def patternGenerationPhase(inp, mainClass, otherClass, patternSet, signSet, coverageSet, idxCols,
-                           depth=sys.maxint):
+def patternGenerationPhase(classType, inp, mainClass, otherClass, patternSet, 
+                            signSet, coverageSet, idxCols, depth=999999):
     '''
     Pattern Generation Phase.
     '''
@@ -687,7 +767,6 @@ def patternGenerationPhase(inp, mainClass, otherClass, patternSet, signSet, cove
         coverageSet.append(totCovered/totInClass)
             
         nCycles += 1 # depth of the forest
-        
 
 def computeCoverage(dataset, index, pattern, sign):
     '''
@@ -878,6 +957,8 @@ def main(argv):
     dataset        = Instance()
     patternsForest = Patterns()
     stats          = Stats()
+    cnt            = Counter()
+
 
     #random.seed(27)
     random.seed(datetime.now())
@@ -889,11 +970,15 @@ def main(argv):
     means, stdevs = computeStatistics(dataset)
     
     #kf = KFold(dataset.nObs, n_folds=nFolds, shuffle=True, random_state=27)
-    kf = KFold(dataset.nObs, n_folds=nFolds, shuffle=True)
+    #  kf = KFold(dataset.nObs, n_folds=nFolds, shuffle=True)
+    kf = KFold(n_splits=nFolds, shuffle=True)
+    print("Parameters of k-fold Cross-Validation ::")
     print(kf)
+    print("-"*51)
+    print("\n")
     
     cFoldCycle = 0
-    for train_index, test_index in kf:
+    for train_index, test_index in kf.split(dataset.A):
         cFoldCycle = cFoldCycle + 1
         
         # initialize (and/or reset) pattern structure
@@ -920,6 +1005,7 @@ def main(argv):
         isFeasible = -1    
         while (isFeasible == -1):
             cuts, train.Abin, train.nBinAttr = dataBinarizationPhase(train, means, stdevs, pTau)
+            fromBinaryToOriginal(train, cuts)
             #isFeasible = isFeasibleProblem(train)
             isFeasible = 1
             if isFeasible == -1:
@@ -978,17 +1064,19 @@ def main(argv):
             
             posI  = [k for k in range(trainForest.nObs) if trainForest.y[k] == pos]
             negI  = [k for k in range(trainForest.nObs) if trainForest.y[k] == neg]
-            patternGenerationPhase(trainForest, posI[:], negI, patternsForest.posP, patternsForest.signP,
-                                   patternsForest.coverageP, idxCols, depth=forestDepth) # POSITIVE
+            patternGenerationPhase("POS", trainForest, posI[:], negI, 
+                                    patternsForest.posP, patternsForest.signP, 
+                                    patternsForest.coverageP, idxCols, depth=forestDepth) # POSITIVE
 
-            patternGenerationPhase(trainForest, negI, posI, patternsForest.negP, patternsForest.signN,
+            patternGenerationPhase("NEG", trainForest, negI, posI, 
+                                    patternsForest.negP, patternsForest.signN,
                                    patternsForest.coverageN, idxCols, depth=forestDepth) # NEGATIVE
-            
-            if withPrinting:
-                print("[004] End of Phase")
-                print("Current nr of patterns :: {0}, {1}".format(patternsForest.getNPos(), patternsForest.getNNeg()))
+
+
 
         getPatternsStats(patternsForest, stats, withPrinting=True)
+
+
         if withPrinting:
             print("\n\n=========================================")
             print("[005] LAD Theory and Classification Phase")
@@ -1014,11 +1102,21 @@ def main(argv):
         input("aka")
         '''
 
+        stats.savePatterns(patternsForest.posP, patternsForest.signP, '+')
+        stats.savePatterns(patternsForest.negP, patternsForest.signN, '-')
+
     #===========================================================================
     # END OF K-FOLD CROSS-VALIDATION CYCLE
 
     printSummaryTable(stats) # print summary of results for the k-fold process
+
+    stats.analysis()
                                                                             
+
+    
+    if withPrinting:
+        print("[004] End of Phase")
+        print("Current nr of patterns :: {0}, {1}".format(patternsForest.getNPos(), patternsForest.getNNeg()))
             
 
         
